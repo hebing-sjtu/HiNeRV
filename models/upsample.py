@@ -73,6 +73,90 @@ def _convert_index(x, in_size, out_size, align_corners: bool):
         y = out_size / in_size * (x + 0.5) - 0.5
     return y
 
+# kernel_bicubic_alignfalse=[
+#     [0.0012359619 ,0.0037078857 ,-0.0092010498 ,-0.0308990479 ,-0.0308990479 ,-0.0092010498 ,0.0037078857 ,0.0012359619],
+#     [0.0037078857 ,0.0111236572 ,-0.0276031494 ,-0.0926971436 ,-0.0926971436 ,-0.0276031494 ,0.0111236572 ,0.0037078857],
+#     [-0.0092010498 ,-0.0276031494 ,0.0684967041 ,0.2300262451 ,0.2300262451 ,0.0684967041 ,-0.0276031494 ,-0.0092010498],
+#     [-0.0308990479 ,-0.0926971436 ,0.2300262451 ,0.7724761963 ,0.7724761963 ,0.2300262451 ,-0.0926971436 ,-0.0308990479],
+#     [-0.0308990479 ,-0.0926971436 ,0.2300262451 ,0.7724761963 ,0.7724761963 ,0.2300262451 ,-0.0926971436 ,-0.0308990479],
+#     [-0.0092010498 ,-0.0276031494 ,0.0684967041 ,0.2300262451 ,0.2300262451 ,0.0684967041 ,-0.0276031494 ,-0.0092010498],
+#     [0.0037078857 ,0.0111236572 ,-0.0276031494 ,-0.0926971436 ,-0.0926971436 ,-0.0276031494 ,0.0111236572 ,0.0037078857],
+#     [0.0012359619 ,0.0037078857 ,-0.0092010498 ,-0.0308990479 ,-0.0308990479 ,-0.0092010498 ,0.0037078857 ,0.0012359619],
+# ]
+
+def cubic_interpolation_kernel(x):
+    abs_x = torch.abs(x)
+    if abs_x <= 1:
+        return (1.5 * abs_x - 2.5) * abs_x**2 + 1
+    elif 1 < abs_x <= 2:
+        return ((-0.5 * abs_x + 2.5) * abs_x - 4) * abs_x + 2
+    else:
+        return 0
+
+def generate_cubic_interpolation_matrix(kernel_size, upsample_factor):
+    center = (kernel_size - 1) / 2.0
+    normal_scale = kernel_size / 2.0
+    matrix = torch.zeros((kernel_size, kernel_size), dtype=torch.float16)
+    for i in range(kernel_size):
+        for j in range(kernel_size):
+            x = (j - center) / normal_scale
+            y = (i - center) / normal_scale
+            matrix[i, j] = cubic_interpolation_kernel(x) * cubic_interpolation_kernel(y)
+    return matrix
+
+class AdaptiveUpsampling(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        
+        self.method, self.align_corners = self.get_upsampling_options(cfg)
+        self.patch_spec = None
+        K = cfg['upsample_kernel_size']
+        S = cfg['upsample_scale']
+        C1 = cfg['C1']
+        C2 = cfg['C2']
+
+        assert C1 == C2
+        self.upsampling_padding = (K//2, K//2, K//2, K//2)
+        self.upsampling_crop=(S*K+K-S)//2
+        upsampling_kernel = generate_cubic_interpolation_matrix(K,S)
+        upsampling_kernel = torch.unsqueeze(upsampling_kernel, (0, 1))
+        upsampling_kernel = upsampling_kernel.expand(-1,C2,-1,-1)
+        self.upsampling_layer = nn.ConvTranspose2d(C1,C2,upsampling_kernel.shape,bias=False,stride=2,padding=self.upsampling_crop,group=C1)
+        self.upsampling_layer.weight.data = nn.Parameter(upsampling_kernel,requires_grad=True)
+    
+    def extra_repr(self):
+        s = 'method={method}, align_corners={align_corners}'
+        return s.format(**self.__dict__)
+
+    def get_upsampling_options(self, cfg):
+        upsample_options = cfg.split(',')
+        assert len(upsample_options) <= 2
+        assert len(upsample_options) < 2 or 'align' in upsample_options
+        method = upsample_options[0]
+        align_corners = 'align' in upsample_options
+        return method, align_corners
+
+    def forward(self, x: torch.Tensor, idx: torch.IntTensor, idx_max: tuple[int, int, int],
+                size: tuple[int, int, int], scale: tuple[int, int, int], padding: tuple[int, int, int],
+                patch_mode: bool=True):
+        """
+        Inputs:
+            x: input tensor with shape [N, T1, H1, W1, C]
+            idx: patch index tensor with shape [N, 3]
+            idx_max: list of 3 ints. Represents the range of patch indexes.
+            size: list of 3 ints. Represents the size of the fulle video. It does not have to be the same as the input size, as the input can be a patch from the full video.
+            scale: list of 3 ints. Represents the scale factor. This will be used to compute the output size.
+            padding: list of 3 ints. Represents the padding size. This will be used to compute the output size.
+            patch_mode: if True, the input is a patch from the full video, and the faster implementation will be used.
+
+        Output:
+            a tensor with shape [N, T2, H2, W2, C]
+        """
+                    
+        x_pad = F.pad(x, self.upsampling_padding,mode='replicate')
+        y_conv= self.upsampling_layer(x_pad)
+        
+        return upsampled_latent.permute((1,0,2,3))
 
 class FastTrilinearInterpolation(nn.Module):
     """
