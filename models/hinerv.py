@@ -152,7 +152,9 @@ class HiNeRVUpsampler(nn.Module):
         self.act = get_activation(kwargs['act'])()
 
         # Layer
-        if self.upsample_type == 'trilinear':
+        if self.upsample_type == 'adaptive':
+            self.layer = AdaptiveUpsampling(**kwargs)
+        elif self.upsample_type == 'trilinear':
             self.layer = FastTrilinearInterpolation(kwargs['config'])
         elif self.upsample_type == 'nearest':
             self.layer = FastNearestInterpolation(kwargs['config'])
