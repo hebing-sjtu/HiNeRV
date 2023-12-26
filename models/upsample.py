@@ -72,18 +72,7 @@ def _convert_index(x, in_size, out_size, align_corners: bool):
     else:
         y = out_size / in_size * (x + 0.5) - 0.5
     return y
-
-# kernel_bicubic_alignfalse=[
-#     [0.0012359619 ,0.0037078857 ,-0.0092010498 ,-0.0308990479 ,-0.0308990479 ,-0.0092010498 ,0.0037078857 ,0.0012359619],
-#     [0.0037078857 ,0.0111236572 ,-0.0276031494 ,-0.0926971436 ,-0.0926971436 ,-0.0276031494 ,0.0111236572 ,0.0037078857],
-#     [-0.0092010498 ,-0.0276031494 ,0.0684967041 ,0.2300262451 ,0.2300262451 ,0.0684967041 ,-0.0276031494 ,-0.0092010498],
-#     [-0.0308990479 ,-0.0926971436 ,0.2300262451 ,0.7724761963 ,0.7724761963 ,0.2300262451 ,-0.0926971436 ,-0.0308990479],
-#     [-0.0308990479 ,-0.0926971436 ,0.2300262451 ,0.7724761963 ,0.7724761963 ,0.2300262451 ,-0.0926971436 ,-0.0308990479],
-#     [-0.0092010498 ,-0.0276031494 ,0.0684967041 ,0.2300262451 ,0.2300262451 ,0.0684967041 ,-0.0276031494 ,-0.0092010498],
-#     [0.0037078857 ,0.0111236572 ,-0.0276031494 ,-0.0926971436 ,-0.0926971436 ,-0.0276031494 ,0.0111236572 ,0.0037078857],
-#     [0.0012359619 ,0.0037078857 ,-0.0092010498 ,-0.0308990479 ,-0.0308990479 ,-0.0092010498 ,0.0037078857 ,0.0012359619],
-# ]
-
+    
 def cubic_interpolation_kernel(x):
     abs_x = torch.abs(x)
     if abs_x <= 1:
@@ -108,7 +97,7 @@ class AdaptiveUpsampling(nn.Module):
     def __init__(self, cfg):
         super().__init__()
         
-        self.method, self.align_corners = self.get_upsampling_options(cfg)
+        self.method, self.align_corners = self.get_upsampling_options(cfg['config'])
         self.patch_spec = None
         K = cfg['upsample_kernel_size']
         S = cfg['scale']
@@ -137,19 +126,6 @@ class AdaptiveUpsampling(nn.Module):
     def forward(self, x: torch.Tensor, idx: torch.IntTensor, idx_max: tuple[int, int, int],
                 size: tuple[int, int, int], scale: tuple[int, int, int], padding: tuple[int, int, int],
                 patch_mode: bool=True):
-        """
-        Inputs:
-            x: input tensor with shape [N, T1, H1, W1, C]
-            idx: patch index tensor with shape [N, 3]
-            idx_max: list of 3 ints. Represents the range of patch indexes.
-            size: list of 3 ints. Represents the size of the fulle video. It does not have to be the same as the input size, as the input can be a patch from the full video.
-            scale: list of 3 ints. Represents the scale factor. This will be used to compute the output size.
-            padding: list of 3 ints. Represents the padding size. This will be used to compute the output size.
-            patch_mode: if True, the input is a patch from the full video, and the faster implementation will be used.
-
-        Output:
-            a tensor with shape [N, T2, H2, W2, C]
-        """
         assert x.ndim == 5
         assert all(size[d] % scale[d] == 0 for d in range(3))
         in_sizes = [size[d] // scale[d] for d in range(3)]
@@ -161,12 +137,13 @@ class AdaptiveUpsampling(nn.Module):
         
         N, T1, H1, W1, C = x.shape
         T2, H2, W2 = out_patch_size
+        out_patch_size = [H2, W2]
                     
         x.permute((0,1,4,2,3)).view(N * T1, C , H1 , W1)            
-        x_pad = F.pad(x, self.upsampling_padding,mode='replicate')
-        y_conv= self.upsampling_layer(x_pad)
+        x = F.pad(x, self.upsampling_padding,mode='replicate')
+        x = crop_tensor_nchw(self.upsampling_layer(x),out_patch_size).view(N, T2, H2, W2, C).contiguous()
         
-        return y_conv.permute((0,2,3,1)).view(N, T2, H2, W2, C)
+        return x
 
 class FastTrilinearInterpolation(nn.Module):
     """
