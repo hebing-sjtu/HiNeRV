@@ -111,17 +111,15 @@ class AdaptiveUpsampling(nn.Module):
         self.method, self.align_corners = self.get_upsampling_options(cfg)
         self.patch_spec = None
         K = cfg['upsample_kernel_size']
-        S = cfg['upsample_scale']
-        C1 = cfg['C1']
-        C2 = cfg['C2']
+        S = cfg['scale']
+        C = cfg['channels']
 
-        assert C1 == C2
         self.upsampling_padding = (K//2, K//2, K//2, K//2)
         self.upsampling_crop=(S*K+K-S)//2
         upsampling_kernel = generate_cubic_interpolation_matrix(K,S)
         upsampling_kernel = torch.unsqueeze(upsampling_kernel, (0, 1))
-        upsampling_kernel = upsampling_kernel.expand(-1,C2,-1,-1)
-        self.upsampling_layer = nn.ConvTranspose2d(C1,C2,upsampling_kernel.shape,bias=False,stride=2,padding=self.upsampling_crop,group=C1)
+        upsampling_kernel = upsampling_kernel.expand(C,-1,-1,-1)
+        self.upsampling_layer = nn.ConvTranspose2d(C,C,upsampling_kernel.shape,bias=False,stride=2,padding=self.upsampling_crop,group=C)
         self.upsampling_layer.weight.data = nn.Parameter(upsampling_kernel,requires_grad=True)
     
     def extra_repr(self):
@@ -152,11 +150,23 @@ class AdaptiveUpsampling(nn.Module):
         Output:
             a tensor with shape [N, T2, H2, W2, C]
         """
+        assert x.ndim == 5
+        assert all(size[d] % scale[d] == 0 for d in range(3))
+        in_sizes = [size[d] // scale[d] for d in range(3)]
+        out_sizes = size
+        in_patch_sizes = x.shape[1:4]
+        out_patch_size = [out_sizes[d] // idx_max[d] + 2 * padding[d] for d in range(3)]
+        in_padding = [(in_patch_sizes[d] - in_sizes[d] // idx_max[d]) // 2 for d in range(3)]
+        out_padding = padding
+        
+        N, T1, H1, W1, C = x.shape
+        T2, H2, W2 = out_patch_size
                     
+        x.permute((0,1,4,2,3)).view(N * T1, C , H1 , W1)            
         x_pad = F.pad(x, self.upsampling_padding,mode='replicate')
         y_conv= self.upsampling_layer(x_pad)
         
-        return upsampled_latent.permute((1,0,2,3))
+        return y_conv.permute((0,2,3,1)).view(N, T2, H2, W2, C)
 
 class FastTrilinearInterpolation(nn.Module):
     """
