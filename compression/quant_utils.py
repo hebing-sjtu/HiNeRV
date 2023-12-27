@@ -119,7 +119,7 @@ def init_quantization(args, logger, model):
                 torch.nn.utils.parametrize.register_parametrization(v, 'weight', quant_layer)
 
 
-def set_quantization(args, logger, model, quant_level, quant_noise, quant_ste, kuma_a, soft_t):
+def set_quantization(args, logger, model, quant_level, quant_noise, quant_ste, kuma_flag, kuma_a, soft_t):
     """
     Set quantization for the model.
     """
@@ -140,6 +140,7 @@ def set_quantization(args, logger, model, quant_level, quant_noise, quant_ste, k
                 v.noise_ratio.copy_(quant_noise)
                 v.a.copy_(kuma_a)
                 v.T.copy_(soft_t)
+                v.kuma = kuma_flag
                 v.ste = quant_ste
 
 def adjust_soft(args, logger, model, kuma_a, soft_t):
