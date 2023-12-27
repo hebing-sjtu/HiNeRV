@@ -4,7 +4,7 @@ HiNeRV
 from .utils import *
 from .layers import *
 from .encoding import PositionalEncoder
-from .upsample import FastTrilinearInterpolation, FastNearestInterpolation, crop_tensor_nthwc
+from .upsample import AdaptiveUpsampling, FastTrilinearInterpolation, FastNearestInterpolation, crop_tensor_nthwc
 from .patch_utils import *
 
 
