@@ -142,6 +142,20 @@ def set_quantization(args, logger, model, quant_level, quant_noise, quant_ste, k
                 v.T.copy_(soft_t)
                 v.ste = quant_ste
 
+def adjust_soft(args, logger, model, kuma_a, soft_t):
+    """
+    adjust hyperparameter in soft rounding
+    """
+    model = unwrap_model(model)
+
+    with torch.no_grad():
+        for k, v in model.named_modules():
+            if isinstance(v, SoftRound):
+                if args.debug:
+                    logger.info(f'     Update soft_round: {k}.weight')
+                v.a.copy_(kuma_a)
+                v.T.copy_(soft_t)
+            
 def _quant_tensor(args, logger, x, quant_level):
     """
     Quantize a tensor.
