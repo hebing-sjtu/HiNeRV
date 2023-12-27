@@ -5,7 +5,7 @@ from utils import *
 import compression
 from compression import prune_utils, quant_utils, codec_utils
 from compression.prune_utils import set_pruning, get_sparsity, PruningMask
-from compression.quant_utils import set_quantization, QuantNoise
+from compression.quant_utils import set_quantization, QuantNoise, SoftRound
 
 
 def initial_parametrizations(args, logger, model):
@@ -20,6 +20,8 @@ def fix_parametrizations(model):
                 for w, p_list in v.parametrizations.items():
                     for p in p_list:
                         if isinstance(p, QuantNoise):
+                            pass
+                        elif isinstance(p, SoftRound):
                             pass
                         elif isinstance(p, PruningMask):
                             p_list.original.mul_(p.mask)
@@ -92,3 +94,11 @@ def set_compression_args(parser):
                         help='Quantization noise ratio (default: 0.1)')
     group.add_argument('--quant-ste', default=False, type=str_to_bool,
                         help='Quantization with ste')
+    group.add_argument('--soft-rounding', default=False, type=str_to_bool,
+                        help='Replace STE with Soft rounding.')
+    group.add_argument('--soft-t', default= [0.3, 0.1], type=float,
+                        help='soft-t start and end (default: [2., 1.])')
+    group.add_argument('--kuma-flag', default=False, type=str_to_bool,
+                        help='Add noise in Kuma distribution')
+    group.add_argument('--kuma-a', default= [2., 1.], type=float,
+                        help='kuma-a start and end, a=1 stands for uniform distribution (default: [2., 1.])')
