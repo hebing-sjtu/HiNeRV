@@ -340,8 +340,11 @@ def main():
             logger.info(f'Quantization noise: {args.quant_noise}')
 
         # Set QAT configs
-        set_quantization(args, logger, model, min(args.quant_level), args.quant_noise, args.quant_ste)
-
+        set_quantization(args, logger, model, min(args.quant_level), args.quant_noise, args.quant_ste, args.kuma_a_start, args.soft_t_start)
+        if args.soft_rounding:
+            delta_a = (args.kuma_a_end - args.kuma_a_start) / (args.quant_epochs - 1)
+            delta_t = (args.soft_t_end - args.soft_t_start) / (args.quant_epochs - 1)
+            
         while epoch < args.epochs + args.prune_epochs + args.quant_epochs:
             quant_epoch = epoch - args.epochs - args.prune_epochs
             train_step(args, logger, 'QAT', quant_epoch, model, train_loader, quant_opt_sch[0], quant_opt_sch[1], train_task, accelerator, False)
@@ -378,7 +381,10 @@ def main():
 
                     # Restore from the checkpoint
                     model.load_state_dict(qat_state_dict)
-
+            if args.soft_rounding:
+                kuma_a = args.kuma_a_start + quant_epoch * delta_a
+                soft_t = args.soft_t_start + quant_epoch * delta_t
+                adjust_soft(args, logger, model, kuma_a, soft_t)
             epoch += 1
 
         # Complete training
