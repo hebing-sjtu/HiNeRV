@@ -18,6 +18,11 @@ def _ste(x):
     """
     return (x.round() - x).detach() + x
 
+def _soft_func(x, T):
+    """
+    Soft rounding function.
+    """
+    return x.round().detach() + 1/2 * torch.tanh((x - x.floor().detach() -1/2) / T) / torch.tanh(1 / (2 * T)) + 1/2
 
 def _quantize_ste(x, n, axis=None):
     """
@@ -29,6 +34,32 @@ def _quantize_ste(x, n, axis=None):
     x_q = _ste(x / x_scale).clamp(-2**(n - 1), 2**(n - 1) - 1)
     return x_q, x_scale
 
+
+class SoftRound(nn.Module):
+    """
+    SoftRound Quantization Process.
+    """
+    def __init__(self, bitwidth, noise_ratio, ste, axis):
+        super().__init__()
+        self.register_buffer('bitwidth', torch.tensor(bitwidth, dtype=torch.float32))
+        self.register_buffer('noise_ratio', torch.tensor(noise_ratio, dtype=torch.float32))
+        self.ste = ste
+        self.axis = axis
+
+    def extra_repr(self):
+        s = 'ste={ste}, axis={axis}'
+        return s.format(**self.__dict__)
+
+    def forward(self, x, T):
+        if self.training:
+            x_q, x_scale = _quantize_ste(x, self.bitwidth, self.axis)
+            x_1 = _soft_func(x / x_scale, T) + torch.rand_like(x)
+            x_2 = _soft_func(x_1, T)
+            x_qr = x_2.to(x.dtype) * x_scale
+            mask = (torch.rand_like(x) > self.noise_ratio).to(x.dtype)
+            return x * mask + x_qr * (1. - mask)
+        else:
+            return x
 
 class QuantNoise(nn.Module):
     """
@@ -54,7 +85,6 @@ class QuantNoise(nn.Module):
             return x * mask + x_qr * (1. - mask)
         else:
             return x
-
 
 def init_quantization(args, logger, model):
     """
