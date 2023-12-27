@@ -5,7 +5,7 @@ from .utils import *
 from models.layers import FeatureGrid
 
 
-_quant_target_cls = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, FeatureGrid)
+_quant_target_cls = (nn.Linear, nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.ConvTranspose2d, FeatureGrid)
 
 
 def _is_quant_target(model, name, module):
@@ -24,6 +24,14 @@ def _soft_func(x, T):
     """
     return x.round().detach() + 1/2 * torch.tanh((x - x.floor().detach() -1/2) / T) / torch.tanh(1 / (2 * T)) + 1/2
 
+def _kuma_dist(x, a):
+    """
+    Kumaraswamy noise distribution.
+    """
+    b = 1 / a * (pow(2, a) - 1) * (a - 1) + 1
+    return (1 - uniform_samples.pow(1.0 / b)).pow(1.0 / a)
+
+
 def _quantize_ste(x, n, axis=None):
     """
     Per-channel & symmetric quantization with STE.
@@ -34,27 +42,47 @@ def _quantize_ste(x, n, axis=None):
     x_q = _ste(x / x_scale).clamp(-2**(n - 1), 2**(n - 1) - 1)
     return x_q, x_scale
 
+# class SoftQuantizer(torch.autograd.Function):
+#     noise_derivative: float = 100.
+
+#     @staticmethod
+#     def forward(ctx, x: torch.Tensor):
+#         ctx.save_for_backward(x)
+#         y = x + (torch.rand_like(x) - 0.5)
+#         return y
+
+#     @staticmethod
+#     def backward(ctx, grad_out):
+#         x, = ctx.saved_tensors
+#         return grad_out * NoiseQuantizer.noise_derivative
 
 class SoftRound(nn.Module):
     """
     SoftRound Quantization Process.
+    kuma(bool) decides the noise distribution
+    a is the hyperparameter of kuma distribution
+    T is the tempurature of soft rounding
     """
-    def __init__(self, bitwidth, noise_ratio, ste, axis):
+    def __init__(self, bitwidth, noise_ratio, ste, axis, kuma, a, T):
         super().__init__()
         self.register_buffer('bitwidth', torch.tensor(bitwidth, dtype=torch.float32))
         self.register_buffer('noise_ratio', torch.tensor(noise_ratio, dtype=torch.float32))
         self.ste = ste
         self.axis = axis
+        self.kuma = kuma
+        self.a = a
+        self.T = T
 
     def extra_repr(self):
         s = 'ste={ste}, axis={axis}'
         return s.format(**self.__dict__)
 
-    def forward(self, x, T):
+    def forward(self, x):
         if self.training:
             x_q, x_scale = _quantize_ste(x, self.bitwidth, self.axis)
-            x_1 = _soft_func(x / x_scale, T) + torch.rand_like(x)
-            x_2 = _soft_func(x_1, T)
+            noise = _kuma_dist(torch.rand_like(x), self.a) if self.kuma else torch.rand_like(x) 
+            x_1 = _soft_func(x / x_scale, self.T) + noise
+            x_2 = _soft_func(x_1, self.T)
             x_qr = x_2.to(x.dtype) * x_scale
             mask = (torch.rand_like(x) > self.noise_ratio).to(x.dtype)
             return x * mask + x_qr * (1. - mask)
@@ -97,7 +125,10 @@ def init_quantization(args, logger, model):
             if _is_quant_target(model, k, v):
                 if args.debug:
                     logger.info(f'     Set quatization: {k}.weight')
-                quant_layer = QuantNoise(bitwidth=8, noise_ratio=0., ste=False, axis=compute_best_quant_axis(v.weight))
+                if args.soft_rounding:
+                    quant_layer = SoftRound(bitwidth=8, noise_ratio=0., ste=False, axis=compute_best_quant_axis(v.weight), kuma=False)
+                else:
+                    quant_layer = QuantNoise(bitwidth=8, noise_ratio=0., ste=False, axis=compute_best_quant_axis(v.weight))
                 quant_layer.to(list(v.parameters())[0].device)
                 torch.nn.utils.parametrize.register_parametrization(v, 'weight', quant_layer)
 
